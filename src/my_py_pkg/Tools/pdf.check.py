@@ -4,13 +4,13 @@ import shutil
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.schema.document import Document
-from my_py_pkg.my_py_pkg.get_embedding_function import get_embedding_function
+from my_py_pkg.Tools.get_embedding_function import get_embedding_function
 # from langchain.vectorstores.chroma import Chroma
 from langchain_chroma import Chroma
 
 
 CHROMA_PATH = "chroma"
-DATA_PATH = "/home/mark/host_ws/src/my_py_pkg/vector/ros2_docs.pdf"
+DATA_PATH = "/home/mark/host_ws/src/my_py_pkg/ros2_docs-1-76.pdf"
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Reset the database.")
     args = parser.parse_args()
     if args.reset:
-        print("✨ Clearing Database")
+        print("Clearing Database")
         clear_database()
 
     # Create (or update) the data store.

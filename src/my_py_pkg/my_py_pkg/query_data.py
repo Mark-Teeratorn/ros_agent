@@ -13,15 +13,13 @@ Examples:
 - ros2 topic list
 - ros2 run turtlesim turtlesim_node
 - ros2 launch my_package my_launch_file.launch.py
-For speed control:
-- ros2 topic pub /turtle1/cmd_vel geometry_msgs/msg/Twist '{{linear: {{x: 2.0, y: 0.0, z: 0.0}}, angular: {{x: 0.0, y: 0.0, z: 1.8}}}}'
 
 {context}
 
 ---
 
 Task: {question}
-Generate a valid ROS 2 command that: {prompt}.
+Generate only a valid ROS 2 command that: {prompt}.
 """
 
 

@@ -40,25 +40,26 @@ class AI_ROS_Agent(Node):
                 self.input_active = False
 
     def get_ros_command_from_ollama(self, user_query: str):
-        self.get_logger().info(f"Preparing RAG-enhanced prompt for: '{user_query}'")
+        # self.get_logger().info(f"Preparing RAG-enhanced prompt for: '{user_query}'")
 
-        try:
-            rag_result = query_rag(user_query)
-            prompt = rag_result["prompt"] if isinstance(rag_result, dict) else rag_result
-        except Exception as e:
-            self.get_logger().error(f"RAG query failed: {e}")
-            return None
+        # try:
+        #     rag_result = query_rag(user_query)
+        #     prompt = rag_result["prompt"] if isinstance(rag_result, dict) else rag_result
+        # except Exception as e:
+        #     self.get_logger().error(f"RAG query failed: {e}")
+        #     return None
 
-        self.get_logger().debug(f"Final prompt sent to Ollama:\n{prompt}")
+        # self.get_logger().debug(f"Final prompt sent to Ollama:\n{prompt}")
+        prompt = user_query # For testing, use the user query directly
 
         data = {
-            "model": "llama3",
+            "model": "html-model:latest",
             "prompt": prompt,
             "stream": True
         }
 
         try:
-            with requests.post("http://localhost:11434/api/generate", json=data, stream=True, timeout=300) as response:
+            with requests.post("http://192.168.1.17:11434/api/generate", json=data, stream=True, timeout=300) as response:
                 response.raise_for_status()
 
                 command_output = ""
@@ -104,24 +105,31 @@ class AI_ROS_Agent(Node):
             self.get_logger().info("Executing ROS command")
             self.get_logger().info(f"{command}")
 
-            # 🔧 Changed: run subprocess detached so it won't stop if parent exits
-            proc = subprocess.Popen(
+            process = subprocess.Popen(
                 full_command,
                 shell=True,
                 executable="/bin/bash",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                preexec_fn=os.setpgrp   # 🔧 detach process group
+                text=True
             )
 
-            time.sleep(1)  # 🔧 small delay to let process start
+            stdout, stderr = process.communicate()  # <- This captures output
 
-            # 🔧 Changed: don't wait/block; assume it starts successfully
+            if stdout:
+                self.get_logger().info(f"[stdout]\n{stdout.strip()}")
+            if stderr:
+                self.get_logger().warn(f"[stderr]\n{stderr.strip()}")
+
+            self.get_logger().info(f"ROS 2 Command launched with PID: {process.pid}")
             return True
 
         except Exception as e:
             self.get_logger().error(f"Command execution failed: {e}")
             return False
+
+
+
 
     def handle_user_input(self):
         if self.input_mode == "voice":
@@ -149,7 +157,7 @@ class AI_ROS_Agent(Node):
             self.get_logger().info("Valid ROS command detected")
             if self.execute_ros_command(ros_command):
                 self.get_logger().info("Command executed successfully")
-                time.sleep(1)  # 🔧 small delay before accepting next input
+                time.sleep(1)  # small delay before accepting next input
             else:
                 self.get_logger().error("Command execution failed")
         else:

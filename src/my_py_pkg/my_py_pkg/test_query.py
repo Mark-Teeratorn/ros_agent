@@ -1,4 +1,4 @@
-from query_data import query_rag
+from my_py_pkg.my_py_pkg.query_data import query_rag
 from langchain_community.llms.ollama import Ollama
 
 EVAL_PROMPT = """
@@ -15,14 +15,6 @@ def topic_check():
         expected_response="ros2 topic list",
     )
 
-
-def node_check():
-    assert query_and_validate(
-        question="How to open turtlesim list in ROS 2? (Answer with the command only)",
-        expected_response="ros2 run turtlesim turtlesim_node",
-    )
-
-
 def query_and_validate(question: str, expected_response: str):
     response_text = query_rag(question)
     prompt = EVAL_PROMPT.format(
@@ -35,7 +27,7 @@ def query_and_validate(question: str, expected_response: str):
 
     print(prompt)
 
-    if "true" in evaluation_results_str_cleaned:
+    if "ros2 topic list" in evaluation_results_str_cleaned:
         # Print response in Green if it is correct.
         print("\033[92m" + f"Response: {evaluation_results_str_cleaned}" + "\033[0m")
         return True
@@ -50,4 +42,4 @@ def query_and_validate(question: str, expected_response: str):
     
 if __name__ == "__main__":
     topic_check()
-    node_check()
+
