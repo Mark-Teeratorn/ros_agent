@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-import os  
-import sounddevice
+import os
 import rclpy
 from rclpy.node import Node
 import subprocess
@@ -11,13 +10,16 @@ import requests
 import json
 import speech_recognition as sr
 import pyttsx3
-from query_data import query_rag
+from .query_data import query_rag
 
 class AI_ROS_Agent(Node):
     def __init__(self):
         super().__init__('ai_ros_agent')
         self.get_logger().info("AI_ROS_Agent Node started")
         self.input_active = False
+        self.current_process = None
+        self.tts_engine = pyttsx3.init()  # Initialize once to prevent reference errors
+        self.tts_engine.setProperty('rate', 150)
         self.input_mode = self.select_input_mode()
         self.create_timer(0.1, self.check_for_input)
 
@@ -39,56 +41,46 @@ class AI_ROS_Agent(Node):
             finally:
                 self.input_active = False
 
-    def get_ros_command_from_ollama(self, user_query: str):
-        # self.get_logger().info(f"Preparing RAG-enhanced prompt for: '{user_query}'")
+    def get_ros_command_from_openrouter(self, user_query: str):
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            self.get_logger().error("Missing OPENROUTER_API_KEY environment variable")
+            return None
 
-        # try:
-        #     rag_result = query_rag(user_query)
-        #     prompt = rag_result["prompt"] if isinstance(rag_result, dict) else rag_result
-        # except Exception as e:
-        #     self.get_logger().error(f"RAG query failed: {e}")
-        #     return None
-
-        # self.get_logger().debug(f"Final prompt sent to Ollama:\n{prompt}")
-        prompt = user_query # For testing, use the user query directly
+        rag_prompt = query_rag(user_query)
 
         data = {
-            "model": "html-model:latest",
-            "prompt": prompt,
-            "stream": True
+            "model": "meta-llama/llama-3.1-405b-instruct",
+            "messages": [
+                {"role": "system", "content": "You are a strict command generator for ROS 2. "
+                                             "Output only the command line, no explanations or markdown."},
+                {"role": "user", "content": rag_prompt}
+            ]
         }
 
         try:
-            with requests.post("http://192.168.1.17:11434/api/generate", json=data, stream=True, timeout=300) as response:
-                response.raise_for_status()
+            response = requests.post(
+                url="https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                data=json.dumps(data),
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            answer = result["choices"][0]["message"]["content"].strip()
 
-                command_output = ""
-                self.get_logger().info("Generating response... (thinking)\n")
+            match = re.search(r"(ros2\s+[^\n\r]+)", answer)
+            if match:
+                return match.group(1).strip()
+            else:
+                self.get_logger().error(f"No valid ROS 2 command found: {answer}")
+                return None
 
-                for line in response.iter_lines():
-                    if line:
-                        try:
-                            parsed = json.loads(line.decode("utf-8"))
-                            chunk = parsed.get("response", "")
-                            if chunk.strip():
-                                command_output += chunk
-                                self.get_logger().info(chunk)
-                        except json.JSONDecodeError:
-                            self.get_logger().error("Error parsing JSON from Ollama")
-
-                cleaned_command = re.sub(r"<.*?>", "", command_output).strip()
-
-                match = re.search(r"(ros2\s+[^\n\r]+)", cleaned_command)
-                if match:
-                    return match.group(1).strip()
-                else:
-                    self.get_logger().error("No valid ROS 2 command found in the RAG-enhanced response")
-                    return None
-
-        except requests.exceptions.Timeout:
-            self.get_logger().error("Ollama API timeout - Is the server running?")
-        except requests.exceptions.RequestException as req_err:
-            self.get_logger().error(f"Request error: {req_err}")
+        except requests.exceptions.RequestException as e:
+            self.get_logger().error(f"OpenRouter request failed: {e}")
         except Exception as e:
             self.get_logger().error(f"Unexpected error: {e}")
         return None
@@ -98,30 +90,30 @@ class AI_ROS_Agent(Node):
             self.get_logger().error("No command to execute")
             return False
 
-        command = re.sub(r'\n', ' ', command)
-        full_command = f"source /opt/ros/humble/setup.bash && {command}"
+        confirm = input(f"\nAbout to run:\n{command}\nProceed? (y/n): ").strip().lower()
+        if confirm not in ['y', 'yes']:
+            self.get_logger().info("Command cancelled by user.")
+            return False
+
+        if self.current_process and self.current_process.poll() is None:
+            self.get_logger().info("Stopping previous command...")
+            self.stop_running_process()
+
+        full_command = f"source /opt/ros/humble/setup.bash && source ~/ired_ws/install/setup.bash && {command}"
 
         try:
-            self.get_logger().info("Executing ROS command")
-            self.get_logger().info(f"{command}")
-
+            self.get_logger().info(f"Executing ROS command: {command}")
             process = subprocess.Popen(
-                full_command,
-                shell=True,
-                executable="/bin/bash",
+                ["bash", "-c", full_command],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
+                env=os.environ.copy()
             )
+            self.current_process = process
 
-            stdout, stderr = process.communicate()  # <- This captures output
-
-            if stdout:
-                self.get_logger().info(f"[stdout]\n{stdout.strip()}")
-            if stderr:
-                self.get_logger().warn(f"[stderr]\n{stderr.strip()}")
-
-            self.get_logger().info(f"ROS 2 Command launched with PID: {process.pid}")
+            # Instead of blocking on communicate(), just keep it running
+            self.get_logger().info("Process started. Type 'stop' to cancel it.")
             return True
 
         except Exception as e:
@@ -129,39 +121,54 @@ class AI_ROS_Agent(Node):
             return False
 
 
-
+    def stop_running_process(self):
+        if self.current_process and self.current_process.poll() is None:
+            self.get_logger().info("Stopping running process...")
+            self.current_process.terminate()
+            try:
+                self.current_process.wait(timeout=5)
+                self.get_logger().info("Process stopped successfully.")
+            except subprocess.TimeoutExpired:
+                self.get_logger().warn("Force killing process...")
+                self.current_process.kill()
+                self.get_logger().info("Process killed.")
+            self.current_process = None
+        else:
+            self.get_logger().info("No running process to stop.")
 
     def handle_user_input(self):
         if self.input_mode == "voice":
             user_input = self.listen_to_user()
         else:
-            user_input = input("\nEnter your ROS task request: ").strip()
+            user_input = input("\nEnter your ROS task request (type 'stop' to cancel running command): ").strip()
 
         if not user_input:
             self.get_logger().error("No input received.")
             return
 
-        self.get_logger().info(f"User input received: '{user_input}'")
-        self.get_logger().debug("Generating ROS command with Ollama...")
+        if user_input.lower() == "stop":
+            self.stop_running_process()
+            return
 
-        ros_command = self.get_ros_command_from_ollama(user_input)
+        self.get_logger().info(f"User input received: '{user_input}'")
+        ros_command = self.get_ros_command_from_openrouter(user_input)
 
         if not ros_command:
             self.get_logger().error("Failed to get ROS command")
             return
 
-        self.get_logger().debug(f"Generated ROS command:\n{ros_command}")
+        self.get_logger().info(f"Generated ROS command:\n{ros_command}")
         self.speak_text(ros_command)
 
         if ros_command.startswith("ros2"):
-            self.get_logger().info("Valid ROS command detected")
             if self.execute_ros_command(ros_command):
-                self.get_logger().info("Command executed successfully")
-                time.sleep(1)  # small delay before accepting next input
+                self.get_logger().info("Command started successfully; now running in background.")
+                time.sleep(1)
             else:
                 self.get_logger().error("Command execution failed")
         else:
             self.get_logger().info("AI response was not a ROS 2 command")
+
 
     def listen_to_user(self):
         recognizer = sr.Recognizer()
@@ -169,9 +176,9 @@ class AI_ROS_Agent(Node):
             self.get_logger().info("Listening... Please speak.")
             try:
                 audio = recognizer.listen(source, timeout=30, phrase_time_limit=15)
-                user_text = recognizer.recognize_google(audio)
-                self.get_logger().info(f"You said: {user_text}")
-                return user_text
+                text = recognizer.recognize_google(audio)
+                self.get_logger().info(f"You said: {text}")
+                return text
             except sr.UnknownValueError:
                 self.get_logger().error("Could not understand audio.")
             except sr.RequestError as e:
@@ -181,14 +188,11 @@ class AI_ROS_Agent(Node):
         return None
 
     def speak_text(self, text):
-        self.tts_engine = pyttsx3.init()
-        self.tts_engine.setProperty('rate', 150)
         try:
             self.tts_engine.say(text)
             self.tts_engine.runAndWait()
         except Exception as e:
-            self.get_logger().error(f"error: {e}")
-
+            self.get_logger().error(f"TTS error: {e}")
 
 def main(args=None):
     rclpy.init(args=args)
@@ -202,7 +206,6 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()
