@@ -16,7 +16,10 @@ Examples:
 
 Example commands for the ired robot:
 "Move /ired forward."
-Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-20, 20.0, 0.0, 0.0]}}" --rate 5
+Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-80, 80.0, 0.0, 0.0]}}" --rate 5
+
+"Move /ired forward for 2 second."
+Output: ros2 topic pub -t 2 /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-80, 80.0, 0.0, 0.0]}}" --rate 5
 
 Request: "Spin /ired clockwise."
 Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-20, -20.0, 0.0, 0.0]}}" --rate 5
@@ -24,11 +27,11 @@ Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{spe
 Request: "Spin /ired counterclockwise."
 Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [20, 20.0, 0.0, 0.0]}}" --rate 5
 
-Request: "Turn /ired right around 90 degree."
-Output: ros2 topic pub -t 2 /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-10, 40.0, 0.0, 0.0]}}" --rate 5
-
 Request: "Turn /ired left around 90 degree."
-Output: ros2 topic pub -t 2 /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-40, 10.0, 0.0, 0.0]}}" --rate 5
+Output: ros2 topic pub -t 2 /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-10, 160, 0.0, 0.0]}}" --rate 5
+
+Request: "Turn /ired right around 90 degree."
+Output: ros2 topic pub -t 2 /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [-160, 10.0, 0.0, 0.0]}}" --rate 5
 
 Request: "Move /ired backward."
 Output: ros2 topic pub /ired/motor/speed_control ired_msgs/msg/MotorSpeed "{{speed: [20, -20.0, 0.0, 0.0]}}" --rate 5

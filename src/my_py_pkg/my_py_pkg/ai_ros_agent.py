@@ -4,8 +4,8 @@ import os
 import rclpy
 from rclpy.node import Node
 import subprocess
+import threading
 import re
-import time
 import requests
 import json
 import speech_recognition as sr
@@ -16,12 +16,13 @@ class AI_ROS_Agent(Node):
     def __init__(self):
         super().__init__('ai_ros_agent')
         self.get_logger().info("AI_ROS_Agent Node started")
-        self.input_active = False
         self.current_process = None
-        self.tts_engine = pyttsx3.init()  # Initialize once to prevent reference errors
+        self.tts_engine = pyttsx3.init()
         self.tts_engine.setProperty('rate', 150)
         self.input_mode = self.select_input_mode()
-        self.create_timer(0.1, self.check_for_input)
+
+        # Start user input thread
+        threading.Thread(target=self.input_loop, daemon=True).start()
 
     def select_input_mode(self):
         while True:
@@ -33,13 +34,44 @@ class AI_ROS_Agent(Node):
             else:
                 print("Invalid input. Please type 'v' or 't'.")
 
-    def check_for_input(self):
-        if not self.input_active:
-            self.input_active = True
-            try:
-                self.handle_user_input()
-            finally:
-                self.input_active = False
+    def input_loop(self):
+        while rclpy.ok():
+            user_input = self.get_user_input()
+            if not user_input:
+                continue
+
+            if user_input.lower() == "stop":
+                self.stop_running_process()
+                continue
+
+            self.get_logger().info(f"User input received: '{user_input}'")
+            ros_command = self.get_ros_command_from_openrouter(user_input)
+
+            if not ros_command:
+                self.get_logger().error("Failed to get ROS command")
+                continue
+
+            self.get_logger().info(f"Generated ROS command:\n{ros_command}")
+            self.speak_text(ros_command)
+
+            if ros_command.startswith("ros2"):
+                if self.execute_ros_command(ros_command):
+                    self.get_logger().info("Command started; running in background.")
+                else:
+                    self.get_logger().error("Command execution failed.")
+            else:
+                self.get_logger().info("AI response was not a ROS 2 command")
+
+    def get_user_input(self):
+        if self.input_mode == "voice":
+            return self.listen_to_user()
+        else:
+            while True:
+                user_input = input("\nEnter your ROS task request (type 'stop' to cancel running command): ").strip()
+                if user_input:
+                    return user_input
+                else:
+                    print("(Please enter something, or type 'stop')")
 
     def get_ros_command_from_openrouter(self, user_query: str):
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -48,12 +80,12 @@ class AI_ROS_Agent(Node):
             return None
 
         rag_prompt = query_rag(user_query)
-
         data = {
-            "model": "meta-llama/llama-3.1-405b-instruct",
+            "model": "meta-llama/llama-3.1-405b-instruct:free",
+            #meta-llama/llama-3.1-405b-instruct:free
             "messages": [
                 {"role": "system", "content": "You are a strict command generator for ROS 2. "
-                                             "Output only the command line, no explanations or markdown."},
+                                              "Output only the command line, no explanations or markdown."},
                 {"role": "user", "content": rag_prompt}
             ]
         }
@@ -69,20 +101,14 @@ class AI_ROS_Agent(Node):
                 timeout=60
             )
             response.raise_for_status()
-            result = response.json()
-            answer = result["choices"][0]["message"]["content"].strip()
-
+            answer = response.json()["choices"][0]["message"]["content"].strip()
             match = re.search(r"(ros2\s+[^\n\r]+)", answer)
             if match:
                 return match.group(1).strip()
             else:
                 self.get_logger().error(f"No valid ROS 2 command found: {answer}")
-                return None
-
-        except requests.exceptions.RequestException as e:
-            self.get_logger().error(f"OpenRouter request failed: {e}")
         except Exception as e:
-            self.get_logger().error(f"Unexpected error: {e}")
+            self.get_logger().error(f"OpenRouter request failed: {e}")
         return None
 
     def execute_ros_command(self, command):
@@ -108,17 +134,32 @@ class AI_ROS_Agent(Node):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=os.environ.copy()
+                bufsize=1
             )
             self.current_process = process
 
-            # Instead of blocking on communicate(), just keep it running
-            self.get_logger().info("Process started. Type 'stop' to cancel it.")
+            # Start thread to handle output
+            self.stream_output(process)
             return True
 
         except Exception as e:
             self.get_logger().error(f"Command execution failed: {e}")
             return False
+
+
+    def stream_output(self, process):
+        try:
+            # Read both stdout and stderr line by line and print immediately
+            for line in iter(process.stdout.readline, ''):
+                print(f"[stdout] {line.strip()}", flush=True)
+            for line in iter(process.stderr.readline, ''):
+                print(f"[stderr] {line.strip()}", flush=True)
+        except Exception as e:
+            self.get_logger().error(f"Error streaming output: {e}")
+        finally:
+            retcode = process.wait()
+            self.get_logger().info(f"Process finished with return code: {retcode}")
+            self.current_process = None
 
 
     def stop_running_process(self):
@@ -136,40 +177,6 @@ class AI_ROS_Agent(Node):
         else:
             self.get_logger().info("No running process to stop.")
 
-    def handle_user_input(self):
-        if self.input_mode == "voice":
-            user_input = self.listen_to_user()
-        else:
-            user_input = input("\nEnter your ROS task request (type 'stop' to cancel running command): ").strip()
-
-        if not user_input:
-            self.get_logger().error("No input received.")
-            return
-
-        if user_input.lower() == "stop":
-            self.stop_running_process()
-            return
-
-        self.get_logger().info(f"User input received: '{user_input}'")
-        ros_command = self.get_ros_command_from_openrouter(user_input)
-
-        if not ros_command:
-            self.get_logger().error("Failed to get ROS command")
-            return
-
-        self.get_logger().info(f"Generated ROS command:\n{ros_command}")
-        self.speak_text(ros_command)
-
-        if ros_command.startswith("ros2"):
-            if self.execute_ros_command(ros_command):
-                self.get_logger().info("Command started successfully; now running in background.")
-                time.sleep(1)
-            else:
-                self.get_logger().error("Command execution failed")
-        else:
-            self.get_logger().info("AI response was not a ROS 2 command")
-
-
     def listen_to_user(self):
         recognizer = sr.Recognizer()
         with sr.Microphone() as source:
@@ -179,12 +186,8 @@ class AI_ROS_Agent(Node):
                 text = recognizer.recognize_google(audio)
                 self.get_logger().info(f"You said: {text}")
                 return text
-            except sr.UnknownValueError:
-                self.get_logger().error("Could not understand audio.")
-            except sr.RequestError as e:
-                self.get_logger().error(f"Speech recognition error: {e}")
             except Exception as e:
-                self.get_logger().error(f"Unexpected error during listening: {e}")
+                self.get_logger().error(f"Voice input error: {e}")
         return None
 
     def speak_text(self, text):
@@ -201,8 +204,6 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.get_logger().info("Operation cancelled by user")
-    except Exception as e:
-        node.get_logger().error(f"Unexpected error in main(): {e}")
     finally:
         node.destroy_node()
         rclpy.shutdown()
